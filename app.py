@@ -909,7 +909,148 @@ def show_missing_columns():
 
 
 def show_type_conversion():
-    st.info("Type Conversion — to be implemented.")
+    df = st.session_state.working_df
+    contracts = st.session_state.column_contracts
+
+    st.header("🔄 Step 6 of 7: Apply Data Types")
+    st.caption("Now that missing values are handled, let's convert columns to their confirmed types.")
+
+    from utils.cleaner import apply_type_conversion
+    from utils.audit import save_snapshot, log_action
+
+    type_to_dtype = {
+        'Continuous Number': 'numeric',
+        'Category': 'category',
+        'Date / Time': 'datetime',
+        'Boolean': 'bool',
+        'Text': 'object',
+        'ID / Identifier': 'object',
+    }
+
+    # Assess which columns need conversion
+    conversion_status = []
+    for col in df.columns:
+        if col not in contracts:
+            continue
+        intended = contracts[col]['intended_type']
+        current = str(df[col].dtype)
+        target_dtype = type_to_dtype.get(intended, 'object')
+
+        needs_conversion = True
+        if intended in ('Text', 'ID / Identifier') and current == 'object':
+            needs_conversion = False
+        elif intended == 'Continuous Number' and pd.api.types.is_numeric_dtype(df[col]):
+            needs_conversion = False
+        elif intended == 'Category' and current == 'category':
+            needs_conversion = False
+        elif intended == 'Date / Time' and pd.api.types.is_datetime64_any_dtype(df[col]):
+            needs_conversion = False
+        elif intended == 'Boolean' and current == 'bool':
+            needs_conversion = False
+
+        # Check if conversion might lose data
+        may_lose = False
+        if needs_conversion and intended == 'Continuous Number':
+            test = pd.to_numeric(df[col], errors='coerce')
+            losses = int(df[col].notna().sum() - test.notna().sum())
+            if losses > 0:
+                may_lose = True
+
+        status = '✅ Already correct' if not needs_conversion else ('⚠️ May lose data' if may_lose else '🔄 Needs conversion')
+        conversion_status.append({
+            'Column': col,
+            'Current': current,
+            'Intended': intended,
+            'Status': status,
+            'needs_conversion': needs_conversion,
+        })
+
+    status_df = pd.DataFrame(conversion_status)
+    st.dataframe(status_df[['Column', 'Current', 'Intended', 'Status']], use_container_width=True, hide_index=True)
+
+    needs_work = [r for r in conversion_status if r['needs_conversion']]
+
+    if not needs_work:
+        st.success("✅ All columns already match their confirmed types.")
+        if st.button("Continue to Duplicates →", type="primary"):
+            st.session_state.stage = 'duplicates'
+            st.rerun()
+        return
+
+    st.divider()
+    st.markdown(f"**{len(needs_work)} columns need conversion.**")
+
+    option = st.radio("How would you like to proceed?", [
+        "✅ Apply all conversions (Recommended)",
+        "🔍 Review one by one",
+    ])
+
+    if option.startswith("✅"):
+        if st.button("Apply All", type="primary"):
+            save_snapshot(df)
+            for item in needs_work:
+                col = item['Column']
+                intended = contracts[col]['intended_type']
+                new_df, affected, details = apply_type_conversion(
+                    st.session_state.working_df, col, intended
+                )
+                st.session_state.working_df = new_df
+                log_action(
+                    phase='type_convert', column=col,
+                    issue=f'Convert from {item["Current"]} to {intended}',
+                    decision=f'Converted to {intended}',
+                    rows_affected=affected,
+                    method='type_conversion',
+                    details=details,
+                )
+                if details.get('coercion_losses', 0) > 0:
+                    st.warning(f"⚠️ {col}: {details['coercion_losses']} values could not be converted and became NaN.")
+            st.success("All conversions applied.")
+            st.session_state.stage = 'duplicates'
+            st.rerun()
+
+    else:
+        for item in needs_work:
+            col = item['Column']
+            intended = contracts[col]['intended_type']
+            with st.expander(f"{col}: {item['Current']} → {intended}"):
+                # Preview
+                st.markdown("**First 5 values that would change:**")
+                sample = df[col].dropna().head(5)
+                st.dataframe(sample, use_container_width=True)
+
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button(f"Apply", key=f"convert_{col}"):
+                        save_snapshot(df)
+                        new_df, affected, details = apply_type_conversion(
+                            st.session_state.working_df, col, intended
+                        )
+                        st.session_state.working_df = new_df
+                        log_action(
+                            phase='type_convert', column=col,
+                            issue=f'Convert to {intended}',
+                            decision=f'Converted to {intended}',
+                            rows_affected=affected,
+                            method='type_conversion',
+                            details=details,
+                        )
+                        st.rerun()
+                with c2:
+                    if st.button(f"Skip", key=f"skip_convert_{col}"):
+                        log_action(
+                            phase='type_convert', column=col,
+                            issue=f'Convert to {intended}',
+                            decision='Skipped',
+                            rows_affected=0,
+                            method='type_conversion_skipped',
+                            details={},
+                        )
+
+        st.divider()
+        if st.button("Continue to Duplicates →", type="primary"):
+            st.session_state.stage = 'duplicates'
+            st.rerun()
 
 
 def show_duplicates():
