@@ -1124,7 +1124,88 @@ def show_duplicates():
 
 
 def show_completion():
-    st.info("Completion — to be implemented.")
+    df = st.session_state.working_df
+    original = st.session_state.original_df
+
+    st.header("🎉 Your Data is Clean")
+
+    # Before vs After
+    st.subheader("Before vs After")
+
+    orig_missing = int(original.isna().sum().sum())
+    clean_missing = int(df.isna().sum().sum())
+    orig_dupes = int(original.duplicated().sum())
+    clean_dupes = int(df.duplicated().sum())
+
+    # Count disguised nulls resolved from audit log
+    disguised_resolved = sum(
+        e['rows_affected'] for e in st.session_state.audit_log
+        if e['method'] == 'replace_disguised_nulls'
+    )
+
+    comparison = pd.DataFrame({
+        '': ['Rows', 'Columns', 'Missing cells', 'Duplicates', 'Disguised nulls resolved'],
+        'Before': [f"{len(original):,}", str(len(original.columns)),
+                    f"{orig_missing:,}", f"{orig_dupes:,}", "0"],
+        'After': [f"{len(df):,}", str(len(df.columns)),
+                   f"{clean_missing:,}", f"{clean_dupes:,}", f"{disguised_resolved:,}"],
+        'Change': [
+            f"{len(df) - len(original):,}",
+            str(len(df.columns) - len(original.columns)),
+            f"{clean_missing - orig_missing:,}",
+            f"{clean_dupes - orig_dupes:,}",
+            f"+{disguised_resolved:,}",
+        ],
+    })
+    st.dataframe(comparison, use_container_width=True, hide_index=True)
+
+    # Full Audit Log
+    st.subheader("Full Audit Log")
+    log = st.session_state.audit_log
+    if log:
+        log_df = pd.DataFrame(log)
+        st.dataframe(log_df, use_container_width=True, hide_index=True)
+
+    # Downloads
+    st.subheader("Download")
+    import io
+
+    c1, c2 = st.columns(2)
+    with c1:
+        csv_buf = io.StringIO()
+        df.to_csv(csv_buf, index=False)
+        base_name = st.session_state.filename.rsplit('.', 1)[0]
+        st.download_button(
+            "⬇ Download Clean CSV",
+            csv_buf.getvalue(),
+            file_name=f"clean_{base_name}.csv",
+            mime="text/csv",
+            type="primary",
+        )
+    with c2:
+        if log:
+            log_buf = io.StringIO()
+            pd.DataFrame(log).to_csv(log_buf, index=False)
+            st.download_button(
+                "⬇ Download Audit Log CSV",
+                log_buf.getvalue(),
+                file_name=f"auditlog_{base_name}.csv",
+                mime="text/csv",
+            )
+
+    # Reproducibility Recipe
+    st.subheader("Reproducibility Recipe")
+    with st.expander("📋 View the cleaning recipe (pandas code)"):
+        from utils.recipe import generate_recipe
+        recipe_code = generate_recipe(log, st.session_state.filename)
+        st.code(recipe_code, language='python')
+
+    # Reset
+    st.divider()
+    if st.button("🔄 Clean another file"):
+        from utils.state import reset_session_state
+        reset_session_state()
+        st.rerun()
 
 
 def render_sidebar():
