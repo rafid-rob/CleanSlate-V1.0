@@ -266,7 +266,121 @@ def show_diagnose():
 
 
 def show_nulls():
-    st.info("Disguised Nulls — to be implemented.")
+    df = st.session_state.working_df
+    disguised = st.session_state.disguised_nulls
+
+    st.header("🔍 Step 3 of 7: Hidden Missing Values")
+
+    if not disguised:
+        st.success("✅ No hidden null values detected.")
+        if st.button("Next →", type="primary"):
+            st.session_state.stage = 'zeros'
+            st.rerun()
+        return
+
+    st.caption(
+        "We found values that look like missing data but aren't being read as null yet. "
+        "We need to fix this before counting what's actually missing."
+    )
+
+    # Display table of suspicious values
+    rows = []
+    for col, values in disguised.items():
+        for val in values:
+            count = int((df[col] == val).sum())
+            rows.append({'Column': col, 'Suspicious Value': repr(val), 'Count': count})
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    # Show example rows
+    st.subheader("Example rows with these values")
+    all_suspicious = []
+    for col, values in disguised.items():
+        mask = df[col].isin(values)
+        all_suspicious.append(mask)
+    if all_suspicious:
+        combined_mask = all_suspicious[0]
+        for m in all_suspicious[1:]:
+            combined_mask = combined_mask | m
+        st.dataframe(df[combined_mask].head(3), use_container_width=True)
+
+    # Options
+    st.divider()
+    choice = st.radio(
+        "Treat all of these as missing values (NaN)?",
+        ["✅ Yes — treat all as missing (Recommended)",
+         "❌ No — they are valid text",
+         "🔍 Decide per column"],
+        index=0,
+    )
+
+    if st.button("Apply", type="primary"):
+        from utils.audit import save_snapshot, log_action
+        from utils.cleaner import replace_disguised_nulls_in_column
+
+        if choice.startswith("✅"):
+            save_snapshot(df)
+            total_affected = 0
+            for col, values in disguised.items():
+                new_df, affected, details = replace_disguised_nulls_in_column(
+                    st.session_state.working_df, col, values
+                )
+                st.session_state.working_df = new_df
+                total_affected += affected
+                log_action(
+                    phase='disguised_nulls', column=col,
+                    issue=f'Found disguised nulls: {values}',
+                    decision='Replaced with NaN',
+                    rows_affected=affected,
+                    method='replace_disguised_nulls',
+                    details={'values_replaced': values},
+                )
+            st.success(f"Done. {total_affected} values now correctly read as null.")
+            st.session_state.stage = 'zeros'
+            st.rerun()
+
+        elif choice.startswith("❌"):
+            st.session_state.stage = 'zeros'
+            st.rerun()
+
+        elif choice.startswith("🔍"):
+            # Per-column mode
+            st.session_state._nulls_per_column = True
+            st.rerun()
+
+    # Per-column mode
+    if st.session_state.get('_nulls_per_column'):
+        from utils.audit import save_snapshot, log_action
+        from utils.cleaner import replace_disguised_nulls_in_column
+
+        save_snapshot(df)
+        for col, values in disguised.items():
+            with st.container():
+                st.markdown(f"**{col}** — found: {values}")
+                col_choice = st.radio(
+                    f"Replace in {col}?",
+                    ["Yes — treat as missing", "No — keep as valid"],
+                    key=f"null_choice_{col}",
+                )
+
+        if st.button("Confirm all per-column choices", key="confirm_per_col"):
+            for col, values in disguised.items():
+                col_choice = st.session_state.get(f"null_choice_{col}", "Yes — treat as missing")
+                if col_choice.startswith("Yes"):
+                    new_df, affected, details = replace_disguised_nulls_in_column(
+                        st.session_state.working_df, col, values
+                    )
+                    st.session_state.working_df = new_df
+                    log_action(
+                        phase='disguised_nulls', column=col,
+                        issue=f'Found disguised nulls: {values}',
+                        decision='Replaced with NaN',
+                        rows_affected=affected,
+                        method='replace_disguised_nulls',
+                        details={'values_replaced': values},
+                    )
+            st.session_state._nulls_per_column = False
+            st.session_state.stage = 'zeros'
+            st.rerun()
 
 
 def show_zeros():
