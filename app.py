@@ -384,7 +384,84 @@ def show_nulls():
 
 
 def show_zeros():
-    st.info("Zero Values — to be implemented.")
+    df = st.session_state.working_df
+    zero_cols = st.session_state.zero_cols
+
+    st.header("🔍 Step 4 of 7: Zero Values")
+
+    if not zero_cols:
+        st.success("✅ No zeros found in numeric columns (excluding boolean flags).")
+        if st.button("Next →", type="primary"):
+            st.session_state.stage = 'missing_bulk'
+            st.rerun()
+        return
+
+    st.caption("Zeros can be legitimate or they can mean missing data recorded as zero. Only you know which.")
+
+    # Initialize tracking
+    if '_zero_col_idx' not in st.session_state:
+        st.session_state._zero_col_idx = 0
+
+    idx = st.session_state._zero_col_idx
+
+    if idx >= len(zero_cols):
+        st.success("Zero check complete.")
+        if st.button("Continue to Missing Values →", type="primary"):
+            del st.session_state._zero_col_idx
+            st.session_state.stage = 'missing_bulk'
+            st.rerun()
+        return
+
+    col = zero_cols[idx]
+    zero_mask = df[col] == 0
+    zero_count = int(zero_mask.sum())
+    non_zero = df[col][df[col] != 0].dropna()
+
+    st.subheader(f"Column: {col}")
+    st.markdown(f"**Zeros found:** {zero_count} rows")
+    if len(non_zero) > 0:
+        st.markdown(f"**Non-zero range:** {non_zero.min():.2f} → {non_zero.max():.2f}")
+        st.markdown(f"**Mean (excluding zeros):** {non_zero.mean():.2f}")
+
+    st.markdown("**Rows with zero:**")
+    st.dataframe(df[zero_mask].head(10), use_container_width=True)
+
+    st.divider()
+    st.markdown("**Is zero a valid value here?**")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("❌ No — treat zeros as missing", key=f"zero_missing_{col}"):
+            from utils.audit import save_snapshot, log_action
+            from utils.cleaner import replace_zeros_with_nan
+
+            save_snapshot(df)
+            new_df, affected, details = replace_zeros_with_nan(df, col)
+            st.session_state.working_df = new_df
+            log_action(
+                phase='zeros', column=col,
+                issue=f'{zero_count} zeros found',
+                decision='Replaced zeros with NaN',
+                rows_affected=affected,
+                method='zero_as_missing',
+                details={},
+            )
+            st.session_state._zero_col_idx += 1
+            st.rerun()
+    with c2:
+        if st.button("✅ Yes — zero is legitimate", key=f"zero_valid_{col}"):
+            from utils.audit import log_action
+
+            log_action(
+                phase='zeros', column=col,
+                issue=f'{zero_count} zeros found',
+                decision='Zeros confirmed as valid',
+                rows_affected=0,
+                method='zero_kept_valid',
+                details={},
+            )
+            st.session_state._zero_col_idx += 1
+            st.rerun()
 
 
 def show_missing_bulk():
