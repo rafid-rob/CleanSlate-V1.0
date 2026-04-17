@@ -1054,7 +1054,73 @@ def show_type_conversion():
 
 
 def show_duplicates():
-    st.info("Duplicates — to be implemented.")
+    df = st.session_state.working_df
+
+    st.header("🔍 Step 7 of 7: Duplicate Rows")
+
+    dup_count = int(df.duplicated().sum())
+
+    if dup_count == 0:
+        st.success("✅ No duplicate rows found. Your data is clean.")
+        if st.button("Finish →", type="primary"):
+            st.session_state.stage = 'done'
+            st.rerun()
+        return
+
+    st.markdown(f"We found **{dup_count:,}** rows that appear more than once.")
+
+    # Show duplicates
+    dup_mask = df.duplicated(keep=False)
+    dup_rows = df[dup_mask].sort_values(by=list(df.columns))
+    st.dataframe(dup_rows.head(20), use_container_width=True)
+
+    st.divider()
+    option = st.radio("What would you like to do?", [
+        "Remove duplicates — keep first (Recommended)",
+        "Remove duplicates — keep last",
+        "Keep all — duplicates are intentional",
+    ])
+
+    if st.button("Apply", type="primary"):
+        from utils.audit import save_snapshot, log_action
+        from utils.cleaner import remove_duplicates
+
+        if option.startswith("Remove") and "first" in option:
+            save_snapshot(df)
+            new_df, affected, details = remove_duplicates(df, keep='first')
+            st.session_state.working_df = new_df
+            log_action(
+                phase='duplicates', column='*',
+                issue=f'{dup_count} duplicate rows',
+                decision='Removed duplicates, kept first',
+                rows_affected=affected,
+                method='remove_duplicates_keep_first',
+                details=details,
+            )
+        elif option.startswith("Remove") and "last" in option:
+            save_snapshot(df)
+            new_df, affected, details = remove_duplicates(df, keep='last')
+            st.session_state.working_df = new_df
+            log_action(
+                phase='duplicates', column='*',
+                issue=f'{dup_count} duplicate rows',
+                decision='Removed duplicates, kept last',
+                rows_affected=affected,
+                method='remove_duplicates_keep_last',
+                details=details,
+            )
+        else:
+            log_action(
+                phase='duplicates', column='*',
+                issue=f'{dup_count} duplicate rows',
+                decision='Kept all duplicates',
+                rows_affected=0,
+                method='keep_duplicates',
+                details={},
+            )
+
+        st.session_state.stage = 'done'
+        st.rerun()
 
 
 def show_completion():
