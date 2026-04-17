@@ -465,7 +465,125 @@ def show_zeros():
 
 
 def show_missing_bulk():
-    st.info("Missing Values: Bulk — to be implemented.")
+    df = st.session_state.working_df
+
+    st.header("🧹 Step 5 of 7: Missing Values")
+
+    # Recompute missingness
+    from utils.scanner import get_fully_empty_columns, get_high_missingness_rows
+
+    total_missing = int(df.isna().sum().sum())
+    total_cells = df.shape[0] * df.shape[1]
+    cols_with_missing = [c for c in df.columns if df[c].isna().any()]
+
+    # Opening summary
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total Rows", f"{len(df):,}")
+    c2.metric("Columns with Missing", str(len(cols_with_missing)))
+    c3.metric("Missing Cells", f"{total_missing:,} ({total_missing/total_cells*100:.1f}%)" if total_cells > 0 else "0")
+
+    if total_missing == 0:
+        st.success("🎉 No missing values found! Nothing to clean here.")
+        if st.button("Continue →", type="primary"):
+            st.session_state.stage = 'type_convert'
+            st.rerun()
+        return
+
+    # Horizontal bars per column
+    st.subheader("Missing values by column")
+    for col in cols_with_missing:
+        pct = df[col].isna().sum() / len(df) * 100
+        if pct < 1:
+            color = "green"
+        elif pct <= 10:
+            color = "orange"
+        else:
+            color = "red"
+        st.markdown(f"**{col}**: {pct:.1f}% missing")
+        st.progress(min(pct / 100, 1.0))
+
+    # Fully empty columns
+    empty_cols = get_fully_empty_columns(df)
+    if empty_cols:
+        st.divider()
+        st.warning(f"⚠️ {len(empty_cols)} columns are entirely empty. Imputation is not possible.")
+        from utils.audit import save_snapshot, log_action
+        from utils.cleaner import drop_column
+
+        for col in empty_cols:
+            c1, c2 = st.columns([3, 1])
+            with c1:
+                st.markdown(f"**{col}** — 100% empty")
+            with c2:
+                if st.button(f"Drop {col}", key=f"drop_empty_{col}"):
+                    save_snapshot(df)
+                    new_df, affected, details = drop_column(st.session_state.working_df, col)
+                    st.session_state.working_df = new_df
+                    log_action(
+                        phase='missing', column=col,
+                        issue='Column 100% empty',
+                        decision='Dropped column',
+                        rows_affected=affected,
+                        method='drop_empty_column',
+                        details=details,
+                    )
+                    st.rerun()
+
+    # High-missingness rows
+    st.divider()
+    st.subheader("Row-level missingness")
+    threshold = st.number_input(
+        "Drop rows with more than X% of columns missing:",
+        min_value=0, max_value=100, value=30, step=5,
+        help="Rows where this percentage of column values are missing will be dropped."
+    )
+    threshold_frac = threshold / 100.0
+    high_miss_rows = get_high_missingness_rows(df, threshold_frac)
+
+    if len(high_miss_rows) > 0:
+        st.warning(f"⚠️ {len(high_miss_rows)} rows have {threshold}%+ of columns missing.")
+        st.dataframe(df.loc[high_miss_rows].head(20), use_container_width=True)
+
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Drop these rows (Recommended)", type="primary", key="drop_high_miss"):
+                from utils.audit import save_snapshot, log_action
+                from utils.cleaner import drop_rows_by_index
+
+                save_snapshot(df)
+                new_df, affected, details = drop_rows_by_index(df, high_miss_rows)
+                st.session_state.working_df = new_df
+                log_action(
+                    phase='missing', column='*',
+                    issue=f'{len(high_miss_rows)} rows with {threshold}%+ missing',
+                    decision='Dropped high-missingness rows',
+                    rows_affected=affected,
+                    method='drop_rows_high_missingness',
+                    details={'threshold': threshold_frac},
+                )
+                st.rerun()
+        with c2:
+            if st.button("Keep them", key="keep_high_miss"):
+                pass  # Do nothing, user continues
+    else:
+        st.success(f"✅ No rows have {threshold}%+ of columns missing.")
+
+    # Duplicate info note
+    dup_count = int(df.duplicated().sum())
+    if dup_count > 0:
+        st.info(f"💡 You have {dup_count:,} duplicate rows. These will be handled in Step 7.")
+
+    # Continue button
+    st.divider()
+    if st.button("Continue to column-by-column cleanup →", type="primary"):
+        # Recompute columns with missing values
+        working = st.session_state.working_df
+        missing_cols = [c for c in working.columns if working[c].isna().any()]
+        missing_cols.sort(key=lambda c: working[c].isna().sum())  # ascending
+        st.session_state.missing_value_cols = missing_cols
+        st.session_state.current_col_idx = 0
+        st.session_state.stage = 'missing_columns'
+        st.rerun()
 
 
 def show_missing_columns():
