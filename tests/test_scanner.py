@@ -133,9 +133,11 @@ def test_high_missingness_default_threshold():
 
 def test_high_missingness_custom_threshold():
     df = pd.DataFrame({'a': [1, None, None], 'b': [2, None, None], 'c': [3, 4, None]})
+    # Row 0: 0/3 = 0%. Row 1: 2/3 = 66.7%. Row 2: 3/3 = 100%.
     result = get_high_missingness_rows(df, 0.5)
     assert 2 in result
-    assert 1 not in result
+    assert 1 in result
+    assert 0 not in result
 
 def test_fully_empty_columns():
     df = pd.DataFrame({'a': [1, 2, 3], 'b': [None, None, None], 'c': [None, None, None]})
