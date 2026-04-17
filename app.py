@@ -413,9 +413,10 @@ def show_zeros():
         return
 
     col = zero_cols[idx]
-    zero_mask = df[col] == 0
+    numeric_col = pd.to_numeric(df[col], errors='coerce')
+    zero_mask = numeric_col == 0
     zero_count = int(zero_mask.sum())
-    non_zero = df[col][df[col] != 0].dropna()
+    non_zero = numeric_col[numeric_col != 0].dropna()
 
     st.subheader(f"Column: {col}")
     st.markdown(f"**Zeros found:** {zero_count} rows")
