@@ -587,7 +587,325 @@ def show_missing_bulk():
 
 
 def show_missing_columns():
-    st.info("Missing Values: Column-by-Column — to be implemented.")
+    df = st.session_state.working_df
+    missing_cols = st.session_state.missing_value_cols
+    idx = st.session_state.current_col_idx
+
+    st.header("🧹 Step 5 of 7: Missing Values")
+
+    # Recompute — some columns may no longer have missing after bulk cleanup
+    missing_cols = [c for c in missing_cols if c in df.columns and df[c].isna().any()]
+    st.session_state.missing_value_cols = missing_cols
+
+    if idx >= len(missing_cols) or len(missing_cols) == 0:
+        skipped = st.session_state.skipped_cols
+        remaining = int(df.isna().sum().sum())
+        if remaining == 0:
+            st.success("🎉 All missing values resolved!")
+        else:
+            st.info(f"{remaining} missing values remain in {len(skipped)} intentionally skipped columns: {', '.join(skipped)}")
+        if st.button("Proceed to Type Conversion →", type="primary"):
+            st.session_state.stage = 'type_convert'
+            st.rerun()
+        return
+
+    col = missing_cols[idx]
+    total = len(missing_cols)
+    contract = st.session_state.column_contracts.get(col, {})
+    col_type = contract.get('intended_type', 'Text')
+
+    st.progress((idx) / total)
+    st.caption(f"Column {idx + 1} of {total} with missing values")
+
+    missing_count = int(df[col].isna().sum())
+    missing_pct = missing_count / len(df) * 100
+
+    st.subheader(f"Column: {col}")
+    st.markdown(f"**Confirmed Type:** {col_type}")
+    st.markdown(f"**Missing:** {missing_count} rows ({missing_pct:.1f}%)")
+
+    # Type-relevant stats
+    non_null = df[col].dropna()
+    if col_type == 'Continuous Number':
+        numeric_vals = pd.to_numeric(non_null, errors='coerce').dropna()
+        if len(numeric_vals) > 0:
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("Min", f"{numeric_vals.min():.2f}")
+            c2.metric("Max", f"{numeric_vals.max():.2f}")
+            c3.metric("Mean", f"{numeric_vals.mean():.2f}")
+            c4.metric("Median", f"{numeric_vals.median():.2f}")
+            c5.metric("Std Dev", f"{numeric_vals.std():.2f}")
+    elif col_type == 'Category':
+        st.markdown(f"**Unique values:** {non_null.nunique()}")
+        counts = non_null.value_counts().head(5)
+        st.dataframe(counts.reset_index(), use_container_width=True, hide_index=True)
+    elif col_type == 'Date / Time':
+        dates = pd.to_datetime(non_null, errors='coerce').dropna()
+        if len(dates) > 0:
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Earliest", str(dates.min().date()))
+            c2.metric("Latest", str(dates.max().date()))
+            c3.metric("Median", str(dates.median().date()) if len(dates) > 0 else "N/A")
+
+    # Show missing rows
+    st.markdown("**Rows with missing values (max 10):**")
+    st.dataframe(df[df[col].isna()].head(10), use_container_width=True)
+
+    # Options by type
+    st.divider()
+    st.markdown("**What would you like to do?**")
+
+    from utils.audit import save_snapshot, log_action
+    from utils.cleaner import (
+        impute_mean, impute_median, impute_mode, impute_group_median,
+        impute_custom, impute_marker, impute_date, drop_rows_by_index,
+    )
+
+    def _apply_and_advance(new_df, affected, method, decision, details=None):
+        st.session_state.working_df = new_df
+        log_action(
+            phase='missing', column=col,
+            issue=f'{missing_count} missing values',
+            decision=decision,
+            rows_affected=affected,
+            method=method,
+            details=details or {},
+        )
+        st.session_state._show_preview = {
+            'col': col, 'before': missing_count, 'after': int(new_df[col].isna().sum()),
+        }
+        st.rerun()
+
+    if col_type == 'Continuous Number':
+        numeric_vals = pd.to_numeric(non_null, errors='coerce').dropna()
+        mean_val = numeric_vals.mean() if len(numeric_vals) > 0 else 0
+        median_val = numeric_vals.median() if len(numeric_vals) > 0 else 0
+
+        # Skew warning
+        if len(numeric_vals) > 0 and median_val != 0:
+            if abs(mean_val - median_val) / abs(median_val) > 0.5:
+                direction = 'right' if mean_val > median_val else 'left'
+                st.warning(f"⚠️ This column is {direction}-skewed. Median may be more reliable.")
+
+        option = st.radio("Choose:", [
+            f"A) Drop these rows (dataset: {len(df):,} → {len(df) - missing_count:,} rows)",
+            f"B) Fill with mean ({mean_val:.2f})",
+            f"C) Fill with median ({median_val:.2f})",
+            "D) Fill with group median",
+            "E) Fill with custom value",
+            "F) Leave for now",
+        ], key=f"opt_{col}")
+
+        # Group median config
+        group_cols = []
+        if option.startswith("D)"):
+            other_cols = [c for c in df.columns if c != col]
+            group_cols = st.multiselect("Group by which columns?", other_cols, key=f"group_{col}")
+            if group_cols:
+                # Guardrail: check for small groups
+                group_sizes = df.groupby(
+                    [df[gc].fillna('__MISSING__').astype(str) for gc in group_cols]
+                )[col].apply(lambda x: x.notna().sum())
+                small = int((group_sizes < 3).sum())
+                if small > 0:
+                    st.warning(f"⚠️ {small} groups have fewer than 3 observations. Those fills may be unreliable.")
+
+        custom_val = None
+        if option.startswith("E)"):
+            custom_val = st.number_input("Enter value:", key=f"custom_{col}")
+
+        if st.button("Apply", key=f"apply_{col}", type="primary"):
+            save_snapshot(df)
+            if option.startswith("A)"):
+                idx_to_drop = df[df[col].isna()].index
+                new_df, affected, details = drop_rows_by_index(df, idx_to_drop)
+                _apply_and_advance(new_df, affected, 'drop_rows_column_missing', 'Dropped rows with missing values')
+            elif option.startswith("B)"):
+                new_df, affected, details = impute_mean(df, col)
+                _apply_and_advance(new_df, affected, 'impute_mean', f'Filled with mean ({mean_val:.2f})', details)
+            elif option.startswith("C)"):
+                new_df, affected, details = impute_median(df, col)
+                _apply_and_advance(new_df, affected, 'impute_median', f'Filled with median ({median_val:.2f})', details)
+            elif option.startswith("D)") and group_cols:
+                new_df, affected, details = impute_group_median(df, col, group_cols)
+                _apply_and_advance(new_df, affected, 'impute_group_median', 'Filled with group median', details)
+                if details.get('fallback_fills', 0) > 0:
+                    log_action(
+                        phase='missing', column=col,
+                        issue='Group median fallback',
+                        decision='Filled remaining with global median',
+                        rows_affected=details['fallback_fills'],
+                        method='impute_group_median_fallback',
+                        details={'global_median': details['global_median']},
+                    )
+            elif option.startswith("E)") and custom_val is not None:
+                new_df, affected, details = impute_custom(df, col, custom_val)
+                _apply_and_advance(new_df, affected, 'impute_custom_value', f'Filled with {custom_val}', details)
+            elif option.startswith("F)"):
+                st.session_state.skipped_cols.append(col)
+                log_action(
+                    phase='missing', column=col,
+                    issue=f'{missing_count} missing values',
+                    decision='Left for now',
+                    rows_affected=0, method='skip_column', details={},
+                )
+                st.session_state.current_col_idx += 1
+                st.rerun()
+
+    elif col_type in ('Category', 'Continuous Number' if False else 'Category'):
+        mode_val = non_null.mode().iloc[0] if len(non_null) > 0 else 'N/A'
+        mode_count = int((non_null == mode_val).sum()) if len(non_null) > 0 else 0
+
+        option = st.radio("Choose:", [
+            f"A) Fill with mode — most common: '{mode_val}' ({mode_count} times)",
+            "B) Fill with custom category",
+            f"C) Drop these rows (dataset: {len(df):,} → {len(df) - missing_count:,})",
+            "D) Mark as 'Unknown'",
+            "E) Leave for now",
+        ], key=f"opt_{col}")
+
+        custom_cat = None
+        if option.startswith("B)"):
+            custom_cat = st.text_input("Enter category:", key=f"custom_cat_{col}")
+
+        if st.button("Apply", key=f"apply_{col}", type="primary"):
+            save_snapshot(df)
+            if option.startswith("A)"):
+                new_df, affected, details = impute_mode(df, col)
+                _apply_and_advance(new_df, affected, 'impute_mode', f'Filled with mode ({mode_val})', details)
+            elif option.startswith("B)") and custom_cat:
+                new_df, affected, details = impute_custom(df, col, custom_cat)
+                _apply_and_advance(new_df, affected, 'impute_custom_value', f'Filled with {custom_cat}', details)
+            elif option.startswith("C)"):
+                idx_to_drop = df[df[col].isna()].index
+                new_df, affected, details = drop_rows_by_index(df, idx_to_drop)
+                _apply_and_advance(new_df, affected, 'drop_rows_column_missing', 'Dropped rows')
+            elif option.startswith("D)"):
+                new_df, affected, details = impute_marker(df, col, 'Unknown')
+                _apply_and_advance(new_df, affected, 'impute_marker_unknown', 'Marked as Unknown', details)
+            elif option.startswith("E)"):
+                st.session_state.skipped_cols.append(col)
+                log_action(phase='missing', column=col, issue=f'{missing_count} missing',
+                           decision='Left for now', rows_affected=0, method='skip_column', details={})
+                st.session_state.current_col_idx += 1
+                st.rerun()
+
+    elif col_type == 'Date / Time':
+        dates = pd.to_datetime(non_null, errors='coerce').dropna()
+        option = st.radio("Choose:", [
+            "A) Drop these rows",
+            f"B) Fill with most recent date ({dates.max().date() if len(dates) > 0 else 'N/A'})",
+            f"C) Fill with oldest date ({dates.min().date() if len(dates) > 0 else 'N/A'})",
+            "D) Fill with median date",
+            "E) Custom date",
+            "F) Leave for now",
+        ], key=f"opt_{col}")
+
+        custom_date = None
+        if option.startswith("E)"):
+            custom_date = st.date_input("Enter date:", key=f"custom_date_{col}")
+
+        if st.button("Apply", key=f"apply_{col}", type="primary"):
+            save_snapshot(df)
+            # Ensure column is datetime for imputation
+            df_work = st.session_state.working_df.copy()
+            df_work[col] = pd.to_datetime(df_work[col], errors='coerce')
+            st.session_state.working_df = df_work
+
+            if option.startswith("A)"):
+                idx_to_drop = df_work[df_work[col].isna()].index
+                new_df, affected, details = drop_rows_by_index(df_work, idx_to_drop)
+                _apply_and_advance(new_df, affected, 'drop_rows_column_missing', 'Dropped rows')
+            elif option.startswith("B)"):
+                new_df, affected, details = impute_date(df_work, col, 'most_recent')
+                _apply_and_advance(new_df, affected, 'impute_most_recent_date', 'Filled with most recent', details)
+            elif option.startswith("C)"):
+                new_df, affected, details = impute_date(df_work, col, 'oldest')
+                _apply_and_advance(new_df, affected, 'impute_oldest_date', 'Filled with oldest', details)
+            elif option.startswith("D)"):
+                new_df, affected, details = impute_date(df_work, col, 'median')
+                _apply_and_advance(new_df, affected, 'impute_median_date', 'Filled with median', details)
+            elif option.startswith("E)") and custom_date:
+                new_df, affected, details = impute_date(df_work, col, 'custom', custom_date=custom_date)
+                _apply_and_advance(new_df, affected, 'impute_median_date', f'Filled with {custom_date}', details)
+            elif option.startswith("F)"):
+                st.session_state.skipped_cols.append(col)
+                log_action(phase='missing', column=col, issue=f'{missing_count} missing',
+                           decision='Left for now', rows_affected=0, method='skip_column', details={})
+                st.session_state.current_col_idx += 1
+                st.rerun()
+
+    elif col_type in ('ID / Identifier', 'Boolean'):
+        option = st.radio("Choose:", [
+            f"A) Drop these rows",
+            "B) Mark as 'Unknown'" if col_type == 'ID / Identifier' else None,
+            "C) Leave for now",
+        ], key=f"opt_{col}")
+
+        if st.button("Apply", key=f"apply_{col}", type="primary"):
+            save_snapshot(df)
+            if option and option.startswith("A)"):
+                idx_to_drop = df[df[col].isna()].index
+                new_df, affected, details = drop_rows_by_index(df, idx_to_drop)
+                _apply_and_advance(new_df, affected, 'drop_rows_column_missing', 'Dropped rows')
+            elif option and option.startswith("B)"):
+                new_df, affected, details = impute_marker(df, col, 'Unknown')
+                _apply_and_advance(new_df, affected, 'impute_marker_unknown', 'Marked as Unknown', details)
+            else:
+                st.session_state.skipped_cols.append(col)
+                log_action(phase='missing', column=col, issue=f'{missing_count} missing',
+                           decision='Left for now', rows_affected=0, method='skip_column', details={})
+                st.session_state.current_col_idx += 1
+                st.rerun()
+
+    else:  # Free Text
+        option = st.radio("Choose:", [
+            "A) Drop these rows",
+            "B) Fill with empty string",
+            "C) Mark as 'Unknown'",
+            "D) Leave for now",
+        ], key=f"opt_{col}")
+
+        if st.button("Apply", key=f"apply_{col}", type="primary"):
+            save_snapshot(df)
+            if option.startswith("A)"):
+                idx_to_drop = df[df[col].isna()].index
+                new_df, affected, details = drop_rows_by_index(df, idx_to_drop)
+                _apply_and_advance(new_df, affected, 'drop_rows_column_missing', 'Dropped rows')
+            elif option.startswith("B)"):
+                new_df, affected, details = impute_custom(df, col, '')
+                _apply_and_advance(new_df, affected, 'impute_custom_value', 'Filled with empty string', details)
+            elif option.startswith("C)"):
+                new_df, affected, details = impute_marker(df, col, 'Unknown')
+                _apply_and_advance(new_df, affected, 'impute_marker_unknown', 'Marked as Unknown', details)
+            else:
+                st.session_state.skipped_cols.append(col)
+                log_action(phase='missing', column=col, issue=f'{missing_count} missing',
+                           decision='Left for now', rows_affected=0, method='skip_column', details={})
+                st.session_state.current_col_idx += 1
+                st.rerun()
+
+    # Preview after action (shown on rerun)
+    preview = st.session_state.get('_show_preview')
+    if preview and preview['col'] == col:
+        st.divider()
+        st.success(f"✅ Done. Before: {preview['before']} missing | After: {preview['after']} missing")
+        st.markdown("**Sample of updated column:**")
+        st.dataframe(st.session_state.working_df[[col]].head(5), use_container_width=True)
+
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("✓ Looks good — next column →", key="next_col"):
+                st.session_state.current_col_idx += 1
+                del st.session_state._show_preview
+                st.rerun()
+        with c2:
+            if st.session_state.undo_enabled:
+                if st.button("↩ Undo — let me reconsider", key="undo_col"):
+                    from utils.audit import undo
+                    undo()
+                    del st.session_state._show_preview
+                    st.rerun()
 
 
 def show_type_conversion():
