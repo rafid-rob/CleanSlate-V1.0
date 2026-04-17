@@ -178,7 +178,91 @@ def show_portrait():
 
 
 def show_diagnose():
-    st.info("Column Contracts — to be implemented.")
+    df = st.session_state.working_df
+
+    st.header("🔍 Step 2 of 7: Confirm Your Column Types")
+    st.caption(
+        "Before fixing anything, let's agree on what each column is supposed to contain. "
+        "This guides every cleaning decision that follows."
+    )
+    st.info(
+        "💡 Why does this matter? The type you confirm tells us which cleaning options "
+        "make sense. You can't fill a date column with an average."
+    )
+
+    from utils.scanner import detect_column_type
+
+    type_options = [
+        'Continuous Number', 'Category', 'Date / Time',
+        'Text', 'Boolean', 'ID / Identifier',
+    ]
+
+    # Map detected types to display options
+    type_map = {
+        'continuous_numeric': 'Continuous Number',
+        'categorical_numeric': 'Category',
+        'categorical_text': 'Category',
+        'free_text': 'Text',
+        'datetime': 'Date / Time',
+        'boolean': 'Boolean',
+        'identifier': 'ID / Identifier',
+        'empty': 'Text',
+    }
+
+    selections = {}
+    for col in df.columns:
+        detected = detect_column_type(df[col], col)
+        suggested = type_map.get(detected, 'Text')
+
+        col1, col2, col3 = st.columns([2, 1, 2])
+        with col1:
+            st.markdown(f"**{col}**")
+            st.caption(f"Current dtype: `{df[col].dtype}`")
+        with col2:
+            st.caption(f"Suggested: {suggested}")
+        with col3:
+            default_idx = type_options.index(suggested) if suggested in type_options else 0
+            selections[col] = st.selectbox(
+                f"Type for {col}",
+                type_options,
+                index=default_idx,
+                key=f"type_{col}",
+                label_visibility="collapsed",
+            )
+
+    st.divider()
+
+    if st.button("✅ Confirm All Column Types →", type="primary"):
+        from utils.audit import log_action
+        from utils.scanner import find_disguised_nulls, find_zero_columns
+
+        # Store contracts (no mutations)
+        contracts = {}
+        for col in df.columns:
+            detected = detect_column_type(df[col], col)
+            contracts[col] = {
+                'detected_type': type_map.get(detected, 'Text'),
+                'intended_type': selections[col],
+                'confirmed': True,
+            }
+            log_action(
+                phase='diagnose',
+                column=col,
+                issue=f'Detected as {detected}',
+                decision=f'Confirmed as {selections[col]}',
+                rows_affected=0,
+                method='type_confirmation',
+                details={'from': type_map.get(detected, 'Text'), 'to': selections[col]},
+            )
+
+        st.session_state.column_contracts = contracts
+
+        # Pre-compute for next phases
+        st.session_state.disguised_nulls = find_disguised_nulls(df)
+        st.session_state.zero_cols = find_zero_columns(df)
+
+        st.session_state.stage = 'nulls'
+        st.rerun()
 
 
 def show_nulls():
