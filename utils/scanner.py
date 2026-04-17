@@ -75,8 +75,17 @@ def find_disguised_nulls(df: pd.DataFrame) -> dict:
 
 def find_zero_columns(df: pd.DataFrame) -> list:
     zero_cols = []
-    for col in df.select_dtypes(include=['number']).columns:
-        unique_vals = set(df[col].dropna().unique())
+    for col in df.columns:
+        series = df[col]
+        # Try to work with numeric values, converting object columns
+        if pd.api.types.is_numeric_dtype(series):
+            numeric = series
+        else:
+            numeric = pd.to_numeric(series, errors='coerce')
+            # Only consider if most values are actually numeric
+            if numeric.notna().sum() < series.notna().sum() * 0.5:
+                continue
+        unique_vals = set(numeric.dropna().unique())
         if 0 in unique_vals or 0.0 in unique_vals:
             if unique_vals.issubset({0, 1, 0.0, 1.0}):
                 continue

@@ -13,7 +13,9 @@ def replace_disguised_nulls_in_column(df: pd.DataFrame, col: str,
 
 def replace_zeros_with_nan(df: pd.DataFrame, col: str) -> tuple:
     new_df = df.copy()
-    mask = new_df[col] == 0
+    # Handle both numeric zeros and string '0'/'0.0'
+    numeric_col = pd.to_numeric(new_df[col], errors='coerce')
+    mask = numeric_col == 0
     affected = int(mask.sum())
     new_df.loc[mask, col] = np.nan
     return new_df, affected, {}
@@ -33,6 +35,7 @@ def drop_column(df: pd.DataFrame, col: str) -> tuple:
 
 def impute_mean(df: pd.DataFrame, col: str) -> tuple:
     new_df = df.copy()
+    new_df[col] = pd.to_numeric(new_df[col], errors='coerce')
     mean_val = new_df[col].mean()
     mask = new_df[col].isna()
     affected = int(mask.sum())
@@ -42,6 +45,7 @@ def impute_mean(df: pd.DataFrame, col: str) -> tuple:
 
 def impute_median(df: pd.DataFrame, col: str) -> tuple:
     new_df = df.copy()
+    new_df[col] = pd.to_numeric(new_df[col], errors='coerce')
     median_val = new_df[col].median()
     mask = new_df[col].isna()
     affected = int(mask.sum())
@@ -61,6 +65,7 @@ def impute_mode(df: pd.DataFrame, col: str) -> tuple:
 def impute_group_median(df: pd.DataFrame, col: str,
                          group_by_cols: list) -> tuple:
     new_df = df.copy()
+    new_df[col] = pd.to_numeric(new_df[col], errors='coerce')
     missing_before = new_df[col].isna().sum()
 
     temp_group_cols = []
