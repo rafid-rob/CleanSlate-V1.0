@@ -61,7 +61,120 @@ def show_upload():
 
 
 def show_portrait():
-    st.info("Data Portrait — to be implemented.")
+    df = st.session_state.working_df
+
+    st.header("📊 Your Data Portrait")
+    st.caption("Before we touch anything, let's understand what you're working with.")
+
+    # Section A — The Basics
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("📁 File", st.session_state.filename)
+    c2.metric("📏 Rows", f"{len(df):,}")
+    c3.metric("📋 Columns", str(len(df.columns)))
+    size_mb = st.session_state.file_size_mb
+    size_str = f"{size_mb:.1f} MB" if size_mb >= 1 else f"{size_mb * 1024:.0f} KB"
+    c4.metric("💾 Size", size_str)
+
+    # Section B — First Look
+    st.subheader("First 4 Rows")
+    st.caption("A quick look at what your data contains.")
+    st.dataframe(df.head(4), use_container_width=True)
+
+    # Section C — Column Summary Table
+    st.subheader("Column Summary")
+    from utils.scanner import detect_column_type
+    summary_rows = []
+    for col in df.columns:
+        detected = detect_column_type(df[col], col)
+        non_null = int(df[col].notna().sum())
+        null_count = int(df[col].isna().sum())
+        null_pct = null_count / len(df) * 100 if len(df) > 0 else 0
+        unique = int(df[col].nunique(dropna=True))
+        samples = df[col].dropna().unique()[:3]
+        sample_str = ", ".join(str(s) for s in samples)
+        summary_rows.append({
+            'Column': col,
+            'Detected Type': detected,
+            'Non-Null': f"{non_null:,}",
+            'Nulls': f"{null_count:,}",
+            'Null %': f"{null_pct:.1f}%",
+            'Unique': f"{unique:,}",
+            'Samples': sample_str,
+        })
+
+    summary_df = pd.DataFrame(summary_rows)
+
+    def color_null_pct(val):
+        pct = float(val.replace('%', ''))
+        if pct == 0:
+            return 'color: #2ecc71'
+        elif pct <= 5:
+            return 'color: #f5a623'
+        else:
+            return 'color: #e74c3c'
+
+    styled = summary_df.style.applymap(color_null_pct, subset=['Null %'])
+    st.dataframe(styled, use_container_width=True, hide_index=True)
+
+    # Section D — Statistical Summary
+    numeric_df = df.describe(include='number')
+    if not numeric_df.empty:
+        st.subheader("Statistical Summary")
+        st.dataframe(numeric_df.round(2).T, use_container_width=True)
+
+        from utils.scanner import describe_numeric_plainly
+        notes = describe_numeric_plainly(df)
+        for note in notes:
+            st.markdown(note)
+
+    # Section E — Categorical Value Counts
+    st.subheader("Categorical Value Counts")
+    for col in df.columns:
+        detected = detect_column_type(df[col], col)
+        if detected in ('categorical_text', 'categorical_numeric'):
+            with st.expander(f"{col} — {df[col].nunique(dropna=True)} unique values"):
+                counts = df[col].value_counts().head(5)
+                st.dataframe(counts.reset_index(), use_container_width=True, hide_index=True)
+
+    # Section F — Health Snapshot
+    st.subheader("Health Snapshot")
+    from utils.scanner import find_disguised_nulls, find_zero_columns, get_fully_empty_columns
+
+    total_missing = int(df.isna().sum().sum())
+    if total_missing == 0:
+        st.markdown("✅ **Missing Values:** None")
+    else:
+        st.markdown(f"⚠️ **Missing Values:** {total_missing:,} cells missing")
+
+    disguised = find_disguised_nulls(df)
+    if not disguised:
+        st.markdown("✅ **Disguised Nulls:** None")
+    else:
+        st.markdown(f"⚠️ **Disguised Nulls:** Found in {len(disguised)} columns")
+
+    zero_cols = find_zero_columns(df)
+    if not zero_cols:
+        st.markdown("✅ **Zero Values:** None in numeric columns")
+    else:
+        st.markdown(f"⚠️ **Zero Values:** {len(zero_cols)} columns have zeros")
+
+    dup_count = int(df.duplicated().sum())
+    if dup_count == 0:
+        st.markdown("✅ **Duplicates:** None")
+    else:
+        st.markdown(f"⚠️ **Duplicates:** {dup_count:,} duplicate rows")
+
+    empty_cols = get_fully_empty_columns(df)
+    if not empty_cols:
+        st.markdown("✅ **Fully Empty Columns:** None")
+    else:
+        st.markdown(f"⚠️ **Fully Empty Columns:** {len(empty_cols)} columns are 100% empty")
+
+    # Navigation
+    st.divider()
+    if st.button("I've reviewed my data — start cleaning →", type="primary"):
+        st.session_state.stage = 'diagnose'
+        st.rerun()
 
 
 def show_diagnose():
