@@ -365,7 +365,7 @@ Options:
 - [Drop these rows] *(Recommended)*
 - [Keep them]
 
-**Duplicate info note:** *"💡 You have X duplicate rows. These will be handled in Step 8."*
+**Duplicate info note:** *"💡 You have X duplicate rows. These will be handled in Step 7."*
 
 After bulk cleanup: recompute `missing_value_cols`, move to `stage = 'missing_columns'`.
 
