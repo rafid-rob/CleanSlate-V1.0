@@ -1,0 +1,23 @@
+# Claude Code internals
+.claude/
+.superpowers/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Test cache
+.pytest_cache/
+
+# Sample data (optional - remove this line if you want to include it)
+Student_Performance.csv
+
+# macOS
+.DS_Store
+
+# Virtual environments
+venv/
+.env/
+env/
