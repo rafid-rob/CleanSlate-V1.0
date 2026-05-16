@@ -113,7 +113,7 @@ def show_portrait():
         else:
             return 'color: #e74c3c'
 
-    styled = summary_df.style.applymap(color_null_pct, subset=['Null %'])
+    styled = summary_df.style.map(color_null_pct, subset=['Null %'])
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
     # Section D — Statistical Summary
