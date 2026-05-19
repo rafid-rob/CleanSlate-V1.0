@@ -117,7 +117,7 @@ def show_portrait():
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
     # Section D — Statistical Summary
-    numeric_df = df.describe(include='number')
+    numeric_df = df.select_dtypes(include='number').describe()
     if not numeric_df.empty:
         st.subheader("Statistical Summary")
         st.dataframe(numeric_df.round(2).T, use_container_width=True)
