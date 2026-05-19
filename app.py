@@ -11,16 +11,34 @@ init_session_state()
 def inject_css():
     st.markdown("""
     <style>
-    /* ── Entry: every step fades up on load ─────────────────────────────── */
+    /* ── Reduced motion: collapse all durations for accessibility ────────────── */
+    @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+            animation-duration: 0.01ms !important;
+            transition-duration: 0.01ms !important;
+        }
+    }
+
+    /* ── Keyframes ───────────────────────────────────────────────────────────── */
     @keyframes cs-fadeUp {
         from { opacity: 0; transform: translateY(10px); }
         to   { opacity: 1; transform: translateY(0);    }
     }
-    .block-container {
-        animation: cs-fadeUp 280ms cubic-bezier(0.23, 1, 0.32, 1) both;
+    @keyframes cs-fadeIn {
+        from { opacity: 0; transform: translateY(6px); }
+        to   { opacity: 1; transform: translateY(0);   }
+    }
+    @keyframes cs-slideDown {
+        from { opacity: 0; transform: translateY(-6px); }
+        to   { opacity: 1; transform: translateY(0);    }
     }
 
-    /* ── Buttons: lift on hover, press scale ─────────────────────────────── */
+    /* ── Step entry: page content fades up on each stage transition ──────────── */
+    .block-container {
+        animation: cs-fadeUp 220ms cubic-bezier(0.23, 1, 0.32, 1) both;
+    }
+
+    /* ── Buttons: lift on hover, press scale ─────────────────────────────────── */
     .stButton > button {
         transition: transform 150ms cubic-bezier(0.23, 1, 0.32, 1),
                     box-shadow 150ms cubic-bezier(0.23, 1, 0.32, 1);
@@ -36,11 +54,23 @@ def inject_css():
         box-shadow: none;
     }
 
-    /* ── Metrics: staggered fade-in ──────────────────────────────────────── */
-    @keyframes cs-fadeIn {
-        from { opacity: 0; transform: translateY(8px); }
-        to   { opacity: 1; transform: translateY(0);   }
+    /* ── Download buttons: identical press feedback ───────────────────────────── */
+    [data-testid="stDownloadButton"] > button {
+        transition: transform 150ms cubic-bezier(0.23, 1, 0.32, 1),
+                    box-shadow 150ms cubic-bezier(0.23, 1, 0.32, 1);
     }
+    @media (hover: hover) and (pointer: fine) {
+        [data-testid="stDownloadButton"] > button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.10);
+        }
+    }
+    [data-testid="stDownloadButton"] > button:active {
+        transform: scale(0.97);
+        box-shadow: none;
+    }
+
+    /* ── Metrics: staggered fade-in ──────────────────────────────────────────── */
     [data-testid="metric-container"] {
         animation: cs-fadeIn 240ms cubic-bezier(0.23, 1, 0.32, 1) both;
     }
@@ -49,26 +79,73 @@ def inject_css():
     div[data-testid="column"]:nth-child(3) [data-testid="metric-container"] { animation-delay: 120ms; }
     div[data-testid="column"]:nth-child(4) [data-testid="metric-container"] { animation-delay: 180ms; }
 
-    /* ── Alerts/banners: slide down ──────────────────────────────────────── */
-    @keyframes cs-slideDown {
-        from { opacity: 0; transform: translateY(-6px); }
-        to   { opacity: 1; transform: translateY(0);    }
-    }
+    /* ── Alerts/banners: slide down ──────────────────────────────────────────── */
     .stAlert {
         animation: cs-slideDown 200ms cubic-bezier(0.23, 1, 0.32, 1) both;
     }
 
-    /* ── DataFrames: soft fade in ────────────────────────────────────────── */
+    /* ── DataFrames: soft fade in ────────────────────────────────────────────── */
     .stDataFrame {
         animation: cs-fadeIn 220ms cubic-bezier(0.23, 1, 0.32, 1) both;
     }
 
-    /* ── Expanders: smooth header transition ─────────────────────────────── */
+    /* ── Expanders: smooth summary hover + content reveal on open ─────────────── */
     details > summary {
-        transition: background-color 150ms ease;
+        transition: background-color 150ms cubic-bezier(0.23, 1, 0.32, 1);
+    }
+    details[open] > div {
+        animation: cs-fadeUp 180ms cubic-bezier(0.23, 1, 0.32, 1) both;
     }
 
-    /* ── Unique-value chips ───────────────────────────────────────────────── */
+    /* ── Checkboxes: hover highlight (Tier 2 suspects) ───────────────────────── */
+    [data-testid="stCheckbox"] {
+        border-radius: 6px;
+        padding: 3px 6px;
+        margin: 1px 0;
+        transition: background-color 150ms cubic-bezier(0.23, 1, 0.32, 1);
+    }
+    @media (hover: hover) and (pointer: fine) {
+        [data-testid="stCheckbox"]:hover {
+            background-color: rgba(49, 130, 206, 0.07);
+        }
+    }
+
+    /* ── Radio buttons: hover highlight ─────────────────────────────────────── */
+    [data-testid="stRadio"] > div > label {
+        border-radius: 6px;
+        padding: 4px 8px;
+        transition: background-color 150ms cubic-bezier(0.23, 1, 0.32, 1);
+    }
+    @media (hover: hover) and (pointer: fine) {
+        [data-testid="stRadio"] > div > label:hover {
+            background-color: rgba(49, 130, 206, 0.07);
+        }
+    }
+
+    /* ── Inputs and selects: focus glow ─────────────────────────────────────── */
+    [data-testid="stTextInput"] > div,
+    [data-testid="stNumberInput"] > div,
+    [data-testid="stSelectbox"] > div {
+        transition: box-shadow 150ms cubic-bezier(0.23, 1, 0.32, 1);
+        border-radius: 6px;
+    }
+    [data-testid="stTextInput"] > div:focus-within,
+    [data-testid="stNumberInput"] > div:focus-within,
+    [data-testid="stSelectbox"] > div:focus-within {
+        box-shadow: 0 0 0 2px rgba(49, 130, 206, 0.35);
+    }
+
+    /* ── Progress bars: smooth fill ─────────────────────────────────────────── */
+    [data-testid="stProgress"] > div {
+        border-radius: 4px;
+        overflow: hidden;
+    }
+    [data-testid="stProgress"] > div > div {
+        transition: width 600ms cubic-bezier(0.23, 1, 0.32, 1);
+        border-radius: 4px;
+    }
+
+    /* ── Unique-value chips ───────────────────────────────────────────────────── */
     .cs-chips-row { line-height: 2.2; margin-bottom: 6px; }
     .cs-col-name  {
         font-size: 0.80rem; font-weight: 600; color: #4a5568;
@@ -85,6 +162,14 @@ def inject_css():
         color: #2b6cb0;
         font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
         animation: cs-fadeIn 200ms cubic-bezier(0.23, 1, 0.32, 1) both;
+        transition: background-color 120ms cubic-bezier(0.23, 1, 0.32, 1),
+                    border-color    120ms cubic-bezier(0.23, 1, 0.32, 1);
+    }
+    @media (hover: hover) and (pointer: fine) {
+        .cs-chip:hover {
+            background: rgba(49, 130, 206, 0.14);
+            border-color: rgba(49, 130, 206, 0.30);
+        }
     }
     .cs-more {
         font-size: 0.76rem; color: #a0aec0; font-style: italic; margin-left: 4px;
@@ -100,7 +185,7 @@ def load_file(uploaded_file):
     """
     name = uploaded_file.name.lower()
     if name.endswith(('.xlsx', '.xls')):
-        return pd.read_excel(uploaded_file)
+        return pd.read_excel(uploaded_file, keep_default_na=False, na_values=[''])
 
     encodings = ['utf-8-sig', 'utf-8', 'cp1252', 'latin-1']
     last_error = None
@@ -510,7 +595,6 @@ def show_nulls():
 
     # Per-column mode
     if st.session_state.get('_nulls_per_column'):
-        save_snapshot(df)
         for col, values in combined.items():
             with st.container():
                 st.markdown(f"**{col}** — found: {values}")
@@ -521,6 +605,7 @@ def show_nulls():
                 )
 
         if st.button("Confirm all per-column choices", key="confirm_per_col"):
+            save_snapshot(df)
             for col, values in combined.items():
                 col_choice = st.session_state.get(f"null_choice_{col}", "Yes — treat as missing")
                 if col_choice.startswith("Yes"):
