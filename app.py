@@ -8,6 +8,91 @@ st.set_page_config(page_title="CleanSlate", page_icon="🧹", layout="wide")
 init_session_state()
 
 
+def inject_css():
+    st.markdown("""
+    <style>
+    /* ── Entry: every step fades up on load ─────────────────────────────── */
+    @keyframes cs-fadeUp {
+        from { opacity: 0; transform: translateY(10px); }
+        to   { opacity: 1; transform: translateY(0);    }
+    }
+    .block-container {
+        animation: cs-fadeUp 280ms cubic-bezier(0.23, 1, 0.32, 1) both;
+    }
+
+    /* ── Buttons: lift on hover, press scale ─────────────────────────────── */
+    .stButton > button {
+        transition: transform 150ms cubic-bezier(0.23, 1, 0.32, 1),
+                    box-shadow 150ms cubic-bezier(0.23, 1, 0.32, 1);
+    }
+    @media (hover: hover) and (pointer: fine) {
+        .stButton > button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.10);
+        }
+    }
+    .stButton > button:active {
+        transform: scale(0.97);
+        box-shadow: none;
+    }
+
+    /* ── Metrics: staggered fade-in ──────────────────────────────────────── */
+    @keyframes cs-fadeIn {
+        from { opacity: 0; transform: translateY(8px); }
+        to   { opacity: 1; transform: translateY(0);   }
+    }
+    [data-testid="metric-container"] {
+        animation: cs-fadeIn 240ms cubic-bezier(0.23, 1, 0.32, 1) both;
+    }
+    div[data-testid="column"]:nth-child(1) [data-testid="metric-container"] { animation-delay:   0ms; }
+    div[data-testid="column"]:nth-child(2) [data-testid="metric-container"] { animation-delay:  60ms; }
+    div[data-testid="column"]:nth-child(3) [data-testid="metric-container"] { animation-delay: 120ms; }
+    div[data-testid="column"]:nth-child(4) [data-testid="metric-container"] { animation-delay: 180ms; }
+
+    /* ── Alerts/banners: slide down ──────────────────────────────────────── */
+    @keyframes cs-slideDown {
+        from { opacity: 0; transform: translateY(-6px); }
+        to   { opacity: 1; transform: translateY(0);    }
+    }
+    .stAlert {
+        animation: cs-slideDown 200ms cubic-bezier(0.23, 1, 0.32, 1) both;
+    }
+
+    /* ── DataFrames: soft fade in ────────────────────────────────────────── */
+    .stDataFrame {
+        animation: cs-fadeIn 220ms cubic-bezier(0.23, 1, 0.32, 1) both;
+    }
+
+    /* ── Expanders: smooth header transition ─────────────────────────────── */
+    details > summary {
+        transition: background-color 150ms ease;
+    }
+
+    /* ── Unique-value chips ───────────────────────────────────────────────── */
+    .cs-chips-row { line-height: 2.2; margin-bottom: 6px; }
+    .cs-col-name  {
+        font-size: 0.80rem; font-weight: 600; color: #4a5568;
+        margin-bottom: 2px; margin-top: 10px;
+    }
+    .cs-chip {
+        display: inline-block;
+        background: rgba(49, 130, 206, 0.07);
+        border: 1px solid rgba(49, 130, 206, 0.18);
+        border-radius: 5px;
+        padding: 1px 7px;
+        font-size: 0.76rem;
+        margin: 2px 3px 2px 0;
+        color: #2b6cb0;
+        font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+        animation: cs-fadeIn 200ms cubic-bezier(0.23, 1, 0.32, 1) both;
+    }
+    .cs-more {
+        font-size: 0.76rem; color: #a0aec0; font-style: italic; margin-left: 4px;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+
 def load_file(uploaded_file):
     """
     Loads CSV or Excel robustly.
@@ -76,9 +161,9 @@ def show_portrait():
     c4.metric("💾 Size", size_str)
 
     # Section B — First Look
-    st.subheader("First 4 Rows")
+    st.subheader("First 5 Rows")
     st.caption("A quick look at what your data contains.")
-    st.dataframe(df.head(4), use_container_width=True)
+    st.dataframe(df.head(5), use_container_width=True)
 
     # Section C — Column Summary Table
     st.subheader("Column Summary")
@@ -116,26 +201,38 @@ def show_portrait():
     styled = summary_df.style.map(color_null_pct, subset=['Null %'])
     st.dataframe(styled, use_container_width=True, hide_index=True)
 
-    # Section D — Statistical Summary
-    _num_cols = df.select_dtypes(include='number')
-    numeric_df = _num_cols.describe() if not _num_cols.empty else pd.DataFrame()
-    if not numeric_df.empty:
-        st.subheader("Statistical Summary")
-        st.dataframe(numeric_df.round(2).T, use_container_width=True)
-
-        from utils.scanner import describe_numeric_plainly
-        notes = describe_numeric_plainly(df)
-        for note in notes:
-            st.markdown(note)
-
-    # Section E — Categorical Value Counts
-    st.subheader("Categorical Value Counts")
+    # Section D — Unique values per column
+    st.subheader("Unique Values per Column")
+    st.caption("Up to 8 shown inline; click to expand the rest.")
     for col in df.columns:
-        detected = detect_column_type(df[col], col)
-        if detected in ('categorical_text', 'categorical_numeric'):
-            with st.expander(f"{col} — {df[col].nunique(dropna=True)} unique values"):
-                counts = df[col].value_counts().head(5)
-                st.dataframe(counts.reset_index(), use_container_width=True, hide_index=True)
+        unique_vals = df[col].dropna().unique()
+        n = len(unique_vals)
+        first_8 = unique_vals[:8]
+        chips_8 = "".join(
+            f'<span class="cs-chip">{str(v)[:40]}</span>' for v in first_8
+        )
+        if n > 8:
+            remaining = n - 8
+            label = f"{col}  ·  {n:,} unique  — click to expand"
+            with st.expander(label):
+                all_vals = unique_vals[:300]
+                chips_all = "".join(
+                    f'<span class="cs-chip">{str(v)[:40]}</span>' for v in all_vals
+                )
+                suffix = (
+                    f'<span class="cs-more">…and {n - 300:,} more not shown</span>'
+                    if n > 300 else ""
+                )
+                st.markdown(
+                    f'<div class="cs-chips-row">{chips_all}{suffix}</div>',
+                    unsafe_allow_html=True,
+                )
+        else:
+            st.markdown(
+                f'<div class="cs-col-name">{col}</div>'
+                f'<div class="cs-chips-row">{chips_8}</div>',
+                unsafe_allow_html=True,
+            )
 
     # Section F — Health Snapshot
     st.subheader("Health Snapshot")
@@ -1287,6 +1384,8 @@ def render_sidebar():
                 mime="text/csv",
             )
 
+
+inject_css()
 
 # Routing
 if st.session_state.stage != 'upload':
