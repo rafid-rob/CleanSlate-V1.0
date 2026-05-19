@@ -332,7 +332,7 @@ def show_diagnose():
 
     if st.button("✅ Confirm All Column Types →", type="primary"):
         from utils.audit import log_action
-        from utils.scanner import find_disguised_nulls, find_zero_columns
+        from utils.scanner import find_zero_columns
 
         # Store contracts (no mutations)
         contracts = {}
@@ -355,8 +355,7 @@ def show_diagnose():
 
         st.session_state.column_contracts = contracts
 
-        # Pre-compute for next phases
-        st.session_state.disguised_nulls = find_disguised_nulls(df)
+        # Pre-compute zero columns for Step 4
         st.session_state.zero_cols = find_zero_columns(df)
 
         st.session_state.stage = 'nulls'
@@ -365,60 +364,125 @@ def show_diagnose():
 
 def show_nulls():
     df = st.session_state.working_df
-    disguised = st.session_state.disguised_nulls
 
     st.header("🔍 Step 3 of 7: Hidden Missing Values")
+    st.caption(
+        "We'll scan every column for values that look like missing data but aren't "
+        "being read as null yet."
+    )
 
-    if not disguised:
+    from utils.scanner import find_disguised_nulls, find_type_mismatch_nulls
+    from utils.audit import save_snapshot, log_action
+    from utils.cleaner import replace_disguised_nulls_in_column
+
+    # ── Tier 3: Custom null values (user input) ───────────────────────────────
+    st.subheader("Custom Null Values")
+    st.caption("Are there values specific to your dataset that should be treated as missing? Enter them separated by commas.")
+    custom_input = st.text_input(
+        "Additional null values (comma-separated):",
+        key="custom_null_input",
+        placeholder="e.g. 999, N.A., not available",
+    )
+    extra_values = [v.strip() for v in custom_input.split(",") if v.strip()] if custom_input else []
+
+    # ── Tier 1: Standard null patterns (+ user custom values) ─────────────────
+    tier1 = find_disguised_nulls(df, extra_values=extra_values)
+
+    # ── Tier 2: Type mismatch — strings in numeric columns ────────────────────
+    tier2_raw = find_type_mismatch_nulls(df)
+    # Exclude anything already caught by Tier 1
+    tier2 = {}
+    for col, vals in tier2_raw.items():
+        already_caught = set(tier1.get(col, []))
+        remaining = [v for v in vals if v not in already_caught]
+        if remaining:
+            tier2[col] = remaining
+
+    has_findings = bool(tier1) or bool(tier2)
+
+    if not has_findings:
         st.success("✅ No hidden null values detected.")
         if st.button("Next →", type="primary"):
             st.session_state.stage = 'zeros'
             st.rerun()
         return
 
-    st.caption(
-        "We found values that look like missing data but aren't being read as null yet. "
-        "We need to fix this before counting what's actually missing."
-    )
+    # ── Tier 1 display ────────────────────────────────────────────────────────
+    if tier1:
+        st.subheader("🔴 Standard Null Patterns Found")
+        st.caption("These match a known list of null indicators (e.g. 'na', 'N/A', '?', 'none').")
+        rows = []
+        for col, values in tier1.items():
+            for val in values:
+                count = int((df[col] == val).sum())
+                rows.append({'Column': col, 'Value': repr(val), 'Count': count})
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
-    # Display table of suspicious values
-    rows = []
-    for col, values in disguised.items():
-        for val in values:
-            count = int((df[col] == val).sum())
-            rows.append({'Column': col, 'Suspicious Value': repr(val), 'Count': count})
-    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    # ── Tier 2 display with checkboxes ────────────────────────────────────────
+    tier2_confirmed = {}
+    if tier2:
+        st.subheader("🟡 Possible Suspects — Strings Inside Numeric Columns")
+        st.caption(
+            "These text values appear in columns that are mostly numeric. "
+            "They may be disguised nulls — check the ones you want to treat as missing."
+        )
+        for col, values in tier2.items():
+            st.markdown(f"**{col}**")
+            confirmed_vals = []
+            for val in values:
+                count = int((df[col] == val).sum())
+                pct = count / len(df) * 100
+                checked = st.checkbox(
+                    f"`{repr(val)}` — {count} occurrence{'s' if count != 1 else ''} ({pct:.1f}%)",
+                    key=f"tier2_{col}_{repr(val)}",
+                )
+                if checked:
+                    confirmed_vals.append(val)
+            if confirmed_vals:
+                tier2_confirmed[col] = confirmed_vals
 
-    # Show example rows
+    # ── Merge tiers into combined dict ────────────────────────────────────────
+    combined = {}
+    for col, vals in tier1.items():
+        combined[col] = list(vals)
+    for col, vals in tier2_confirmed.items():
+        if col in combined:
+            combined[col] = list(set(combined[col]) | set(vals))
+        else:
+            combined[col] = list(vals)
+
+    if not combined:
+        st.info("No values selected for replacement. Tick checkboxes above or continue.")
+        if st.button("Skip this step →", key="skip_nulls", type="primary"):
+            st.session_state.stage = 'zeros'
+            st.rerun()
+        return
+
+    # ── Example rows ──────────────────────────────────────────────────────────
     st.subheader("Example rows with these values")
-    all_suspicious = []
-    for col, values in disguised.items():
-        mask = df[col].isin(values)
-        all_suspicious.append(mask)
-    if all_suspicious:
-        combined_mask = all_suspicious[0]
-        for m in all_suspicious[1:]:
-            combined_mask = combined_mask | m
-        st.dataframe(df[combined_mask].head(3), use_container_width=True)
+    all_masks = [df[col].isin(vals) for col, vals in combined.items()]
+    combined_mask = all_masks[0]
+    for m in all_masks[1:]:
+        combined_mask = combined_mask | m
+    st.dataframe(df[combined_mask].head(3), use_container_width=True)
 
-    # Options
+    # ── Options ───────────────────────────────────────────────────────────────
     st.divider()
     choice = st.radio(
-        "Treat all of these as missing values (NaN)?",
-        ["✅ Yes — treat all as missing (Recommended)",
-         "❌ No — they are valid text",
-         "🔍 Decide per column"],
+        "Treat all selected values as missing (NaN)?",
+        [
+            "✅ Yes — treat all as missing (Recommended)",
+            "❌ No — they are valid text",
+            "🔍 Decide per column",
+        ],
         index=0,
     )
 
     if st.button("Apply", type="primary"):
-        from utils.audit import save_snapshot, log_action
-        from utils.cleaner import replace_disguised_nulls_in_column
-
         if choice.startswith("✅"):
             save_snapshot(df)
             total_affected = 0
-            for col, values in disguised.items():
+            for col, values in combined.items():
                 new_df, affected, details = replace_disguised_nulls_in_column(
                     st.session_state.working_df, col, values
                 )
@@ -441,27 +505,23 @@ def show_nulls():
             st.rerun()
 
         elif choice.startswith("🔍"):
-            # Per-column mode
             st.session_state._nulls_per_column = True
             st.rerun()
 
     # Per-column mode
     if st.session_state.get('_nulls_per_column'):
-        from utils.audit import save_snapshot, log_action
-        from utils.cleaner import replace_disguised_nulls_in_column
-
         save_snapshot(df)
-        for col, values in disguised.items():
+        for col, values in combined.items():
             with st.container():
                 st.markdown(f"**{col}** — found: {values}")
-                col_choice = st.radio(
+                st.radio(
                     f"Replace in {col}?",
                     ["Yes — treat as missing", "No — keep as valid"],
                     key=f"null_choice_{col}",
                 )
 
         if st.button("Confirm all per-column choices", key="confirm_per_col"):
-            for col, values in disguised.items():
+            for col, values in combined.items():
                 col_choice = st.session_state.get(f"null_choice_{col}", "Yes — treat as missing")
                 if col_choice.startswith("Yes"):
                     new_df, affected, details = replace_disguised_nulls_in_column(
