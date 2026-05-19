@@ -22,7 +22,7 @@ def load_file(uploaded_file):
     for enc in encodings:
         try:
             uploaded_file.seek(0)
-            return pd.read_csv(uploaded_file, encoding=enc)
+            return pd.read_csv(uploaded_file, encoding=enc, keep_default_na=False, na_values=[''])
         except (UnicodeDecodeError, UnicodeError) as e:
             last_error = e
             continue

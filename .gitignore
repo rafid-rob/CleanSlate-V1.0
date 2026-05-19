@@ -1,6 +1,12 @@
+# Local-only files (never push to GitHub)
+app_local.py
+.streamlit/
+
 # Claude Code internals
 .claude/
 .superpowers/
+.agents/
+skills-lock.json
 
 # Python cache
 __pycache__/
