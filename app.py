@@ -996,7 +996,7 @@ def show_missing_columns():
                 st.session_state.current_col_idx += 1
                 st.rerun()
 
-    elif col_type in ('Category', 'Continuous Number' if False else 'Category'):
+    elif col_type == 'Category':
         mode_val = non_null.mode().iloc[0] if len(non_null) > 0 else 'N/A'
         mode_count = int((non_null == mode_val).sum()) if len(non_null) > 0 else 0
 
